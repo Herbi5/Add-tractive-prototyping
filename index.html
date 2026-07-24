@@ -231,7 +231,7 @@
           </pattern>
         </defs>
         <rect x="10" y="92" width="200" height="26" rx="2" fill="url(#hatchSub)" stroke="#083d28"/>
-        <rect id="sectionBlob" x="110" y="92" width="0" height="0" rx="2" fill="url(#hatchBlob)" stroke="#7a8088"/>
+        <path id="sectionBlob" fill="url(#hatchBlob)" stroke="#7a8088"/>
         <line id="laserGuideL" x1="110" y1="40" x2="110" y2="92" stroke="var(--laser)" stroke-width="1.4" opacity="0" filter="url(#softGlow)"/>
         <line id="laserGuideR" x1="110" y1="40" x2="110" y2="92" stroke="var(--laser)" stroke-width="1.4" opacity="0" filter="url(#softGlow)"/>
         <g id="dimGroup" font-family="IBM Plex Mono" font-size="9.5" fill="var(--cyan)" opacity="0">
@@ -360,6 +360,27 @@
   const S_W2 = 40;       // after finish laser pass
   const W_FULL_MM = 0.30, W1_MM = 0.20, W2_MM = 0.15;
 
+  // builds a material cross-section that, for domeAmt=1, is a gaussian-like bead
+  // tapering to zero height at both baseline edges (as-deposited paste), and for
+  // domeAmt=0 is a hard-walled rectangle (post laser-trim). Interpolates smoothly.
+  function blobPath(x, w, h, domeAmt, rx){
+    if(h <= 0.05 || w <= 0.05) return '';
+    const y0 = S_BASE_Y;
+    const edgeH = h * (1 - domeAmt);      // wall height before the cap curve starts
+    const yWallTop = y0 - edgeH;
+    const yPeak = y0 - h;
+    const xL = x, xR = x + w;
+    const r = Math.max(0, Math.min(rx, w/2 - 0.5, edgeH));
+    const tlx = xL + r, trx = xR - r;
+    const capSpread = w * 0.34;
+    return `M ${xL.toFixed(2)},${y0.toFixed(2)} `
+      + `L ${xL.toFixed(2)},${(yWallTop + r).toFixed(2)} `
+      + `Q ${xL.toFixed(2)},${yWallTop.toFixed(2)} ${tlx.toFixed(2)},${yWallTop.toFixed(2)} `
+      + `C ${(xL + capSpread).toFixed(2)},${yPeak.toFixed(2)} ${(xR - capSpread).toFixed(2)},${yPeak.toFixed(2)} ${trx.toFixed(2)},${yWallTop.toFixed(2)} `
+      + `Q ${xR.toFixed(2)},${yWallTop.toFixed(2)} ${xR.toFixed(2)},${(yWallTop + r).toFixed(2)} `
+      + `L ${xR.toFixed(2)},${y0.toFixed(2)} Z`;
+  }
+
   const messages = [
     [30,   '<b>&gt;</b> DISPENSER HEAD ENGAGED'],
     [320,  '<b>&gt;</b> Ag PASTE FLOW 0.8 mL/min'],
@@ -409,32 +430,32 @@
   function getSectionState(elapsed){
     if(elapsed < T1){
       const needleLen = (elapsed/T1) * totalLen;
-      if(needleLen < sectionLen) return {h:0, w:S_FULL_W, rx:2, mm:0, tier:'none'};
-      return {h:S_H, w:S_FULL_W, rx:10, mm:W_FULL_MM, tier:'paste'};
+      if(needleLen < sectionLen) return {h:0, w:S_FULL_W, rx:2, dome:1, mm:0, tier:'none'};
+      return {h:S_H, w:S_FULL_W, rx:4, dome:1, mm:W_FULL_MM, tier:'paste'};
     }
     if(elapsed < T_TC1_END){
-      return {h:S_H, w:S_FULL_W, rx:10, mm:W_FULL_MM, tier:'paste'};
+      return {h:S_H, w:S_FULL_W, rx:4, dome:1, mm:W_FULL_MM, tier:'paste'};
     }
     if(elapsed < T_TP1_END){
       const p = (elapsed - T_TC1_END) / TP1;
       const laserLen = p * totalLen;
-      if(laserLen < sectionLen) return {h:S_H, w:S_FULL_W, rx:10, mm:W_FULL_MM, tier:'paste'};
-      return {h:S_H, w:S_W1, rx:7, mm:W1_MM, tier:'mid'};
+      if(laserLen < sectionLen) return {h:S_H, w:S_FULL_W, rx:4, dome:1, mm:W_FULL_MM, tier:'paste'};
+      return {h:S_H, w:S_W1, rx:5, dome:0.35, mm:W1_MM, tier:'mid'};
     }
     if(elapsed < T_TR_END){
-      return {h:S_H, w:S_W1, rx:7, mm:W1_MM, tier:'mid'};
+      return {h:S_H, w:S_W1, rx:5, dome:0.35, mm:W1_MM, tier:'mid'};
     }
     if(elapsed < T_TP2_END){
       const p = (elapsed - T_TR_END) / TP2;
       const laserLen = p * totalLen;
-      if(laserLen < sectionLen) return {h:S_H, w:S_W1, rx:7, mm:W1_MM, tier:'mid'};
-      return {h:S_H, w:S_W2, rx:3, mm:W2_MM, tier:'final'};
+      if(laserLen < sectionLen) return {h:S_H, w:S_W1, rx:5, dome:0.35, mm:W1_MM, tier:'mid'};
+      return {h:S_H, w:S_W2, rx:1.5, dome:0, mm:W2_MM, tier:'final'};
     }
-    return {h:S_H, w:S_W2, rx:3, mm:W2_MM, tier:'final'};
+    return {h:S_H, w:S_W2, rx:1.5, dome:0, mm:W2_MM, tier:'final'};
   }
 
   // smoothed render values (quick ease toward target, not an instant snap)
-  let cur = {h:0, w:S_FULL_W, rx:2};
+  let cur = {h:0, w:S_FULL_W, rx:2, dome:1};
 
   function resetVisuals(){
     pasteLayer.setAttribute('stroke-dasharray', `0 ${totalLen}`);
@@ -445,12 +466,8 @@
     padStart.setAttribute('opacity', 0);
     padEnd.setAttribute('opacity', 0);
 
-    cur = {h:0, w:S_FULL_W, rx:2};
-    sectionBlob.setAttribute('width', 0);
-    sectionBlob.setAttribute('height', 0);
-    sectionBlob.setAttribute('x', S_CX);
-    sectionBlob.setAttribute('y', S_BASE_Y);
-    sectionBlob.setAttribute('rx', 2);
+    cur = {h:0, w:S_FULL_W, rx:2, dome:1};
+    sectionBlob.setAttribute('d', '');
     laserGuideL.setAttribute('opacity', 0);
     laserGuideR.setAttribute('opacity', 0);
     dimGroup.setAttribute('opacity', 0);
@@ -577,14 +594,12 @@
     cur.h  += (target.h  - cur.h)  * 0.3;
     cur.w  += (target.w  - cur.w)  * 0.3;
     cur.rx += (target.rx - cur.rx) * 0.3;
+    cur.dome += (target.dome - cur.dome) * 0.25;
     if(Math.abs(target.h - cur.h) < 0.05) cur.h = target.h;
     if(Math.abs(target.w - cur.w) < 0.05) cur.w = target.w;
+    if(Math.abs(target.dome - cur.dome) < 0.01) cur.dome = target.dome;
 
-    sectionBlob.setAttribute('height', cur.h.toFixed(2));
-    sectionBlob.setAttribute('y', (S_BASE_Y - cur.h).toFixed(2));
-    sectionBlob.setAttribute('width', cur.w.toFixed(2));
-    sectionBlob.setAttribute('x', (S_CX - cur.w/2).toFixed(2));
-    sectionBlob.setAttribute('rx', cur.rx.toFixed(1));
+    sectionBlob.setAttribute('d', blobPath(S_CX - cur.w/2, cur.w, cur.h, cur.dome, cur.rx));
 
     widthValue.textContent = target.mm.toFixed(2) + ' mm';
 
